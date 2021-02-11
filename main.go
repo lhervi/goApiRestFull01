@@ -57,7 +57,7 @@ var psqlInfo string = fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s
 
 //*****************************
 
-func login(c *gin.Context) {
+func Login(c *gin.Context) {
 
 	//************ Get user information from the db
 	//w http.ResponseWriter, r *http.Request,
@@ -139,7 +139,7 @@ func login(c *gin.Context) {
 
 //*****************************
 
-func getAll(c *gin.Context) {
+func GetAll(c *gin.Context) {
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -273,8 +273,8 @@ func main() {
 
 	router := gin.Default()
 
-	router.POST("/login", login)           // **************  Get one user  **************
-	router.GET("/all", getAll)             // **************  Get all users  **************
+	router.POST("/login", Login)           // **************  Get one user  **************
+	router.GET("/all", GetAll)             // **************  Get all users  **************
 	router.GET("/user/:id", getOne)        // **************  Get one user  **************
 	router.POST("/user", insertUser)       // **************  Insert user  **************
 	router.PUT("/user", updateUser)        // **************  Update user  **************
