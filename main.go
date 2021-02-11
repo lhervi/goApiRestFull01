@@ -4,12 +4,35 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
+
+	"github.com/dgrijalva/jwt-go"
+
+	_ "github.com/lib/pq"
 )
+
+//UserInfo user information
+type UserInfo struct {
+	Email     string
+	Passsword string
+	Phrase    string
+}
+
+var jwtKey []byte
+
+//Claims vars
+type Claims struct {
+	UserEmail string `json:"email"`
+	jwt.StandardClaims
+}
+
+var userInfo UserInfo
+var w http.ResponseWriter
 
 const (
 	host     = "localhost"
@@ -19,21 +42,104 @@ const (
 	dbname   = "users"
 )
 
+//User information
 type User struct {
-	Id       int
+	ID       int
 	Name     string
 	Lastname string
 	Email    string
 	Role     string
 }
 
+//Database connection parameters
 var psqlInfo string = fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 	host, port, user, password, dbname)
 
-func getAll(c *gin.Context) {
+//*****************************
 
-	//psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-	//	host, port, user, password, dbname)
+func login(c *gin.Context) {
+
+	//************ Get user information from the db
+	//w http.ResponseWriter, r *http.Request,
+
+	db, err := sql.Open("postgres", psqlInfo)
+
+	userInfo.Email = c.PostForm("email")
+	userInfo.Passsword = c.PostForm("password")
+	fmt.Println(" ")
+
+	fmt.Println(userInfo.Email)
+	fmt.Println(userInfo.Passsword)
+	fmt.Println(" ")
+
+	fmt.Printf(`email: %s  password: %s `, userInfo.Email, userInfo.Passsword)
+	fmt.Println(" ")
+
+	sqlStatement := `SELECT phrase FROM UserInfo WHERE email=$1 and password=$2;`
+	row := db.QueryRow(sqlStatement, userInfo.Email, userInfo.Passsword)
+	err = row.Scan(&userInfo.Phrase)
+	if err != nil {
+
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Println(row)
+		fmt.Println(err.Error())
+		return
+	}
+
+	jwtKey = []byte(userInfo.Phrase)
+
+	fmt.Printf(`El valor de jwtKey es %s`, jwtKey)
+	fmt.Println(" ")
+
+	expirationTime := time.Now().Add(5 * time.Minute)
+
+	claims := &Claims{
+		UserEmail: userInfo.Email,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expirationTime.Unix(),
+		},
+	}
+
+	// Declare the token with the algorithm used for signing, and the claims
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	//token := jwt.New(jwt.SigningMethodHS256)
+	// Create the JWT string
+
+	tokenString, err := token.SignedString(jwtKey)
+	fmt.Println(" ")
+	fmt.Printf(`El valor del tokenString: %s`, tokenString)
+	fmt.Println(" ")
+	if err != nil {
+		// If there is an error in creating the JWT return an internal server error
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Print(err.Error())
+		fmt.Printf(`Error construyendo el Token %s`, err.Error())
+		return
+	}
+	// Finally, we set the client cookie for "token" as the JWT we just generated
+	// we also set an expiry time which is the same as the token itself
+
+	/*
+		http.SetCookie(w, &http.Cookie{
+			Name:    "token",
+			Value:   tokenString,
+			Expires: expirationTime,
+		})
+	*/
+
+	cookie := http.Cookie{
+		Name:  "mycookie",
+		Value: "prueba",
+	}
+
+	http.SetCookie(w, &cookie)
+
+}
+
+//*****************************
+
+func getAll(c *gin.Context) {
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -47,7 +153,7 @@ func getAll(c *gin.Context) {
 		fmt.Print(err.Error())
 	}
 	for rows.Next() {
-		err = rows.Scan(&user.Id, &user.Name, &user.Lastname, &user.Email, &user.Role)
+		err = rows.Scan(&user.ID, &user.Name, &user.Lastname, &user.Email, &user.Role)
 		users = append(users, user)
 		if err != nil {
 			fmt.Print(err.Error())
@@ -62,9 +168,6 @@ func getAll(c *gin.Context) {
 
 func getOne(c *gin.Context) {
 
-	//psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-	//	host, port, user, password, dbname)
-
 	db, err := sql.Open("postgres", psqlInfo)
 
 	var (
@@ -75,7 +178,7 @@ func getOne(c *gin.Context) {
 	id := c.Param("id")
 	sqlStatement := `SELECT id, name, lastname, email, role FROM UserInfo WHERE id=$1;`
 	row := db.QueryRow(sqlStatement, id)
-	err = row.Scan(&user.Id, &user.Name, &user.Lastname, &user.Email, &user.Role)
+	err = row.Scan(&user.ID, &user.Name, &user.Lastname, &user.Email, &user.Role)
 	if err != nil {
 		result = gin.H{
 			"result": nil,
@@ -92,9 +195,6 @@ func getOne(c *gin.Context) {
 }
 
 func insertUser(c *gin.Context) {
-
-	//psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-	//	host, port, user, password, dbname)
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -122,9 +222,6 @@ func insertUser(c *gin.Context) {
 }
 
 func updateUser(c *gin.Context) {
-
-	//psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-	//host, port, user, password, dbname)
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -155,9 +252,6 @@ func updateUser(c *gin.Context) {
 
 func deleteUser(c *gin.Context) {
 
-	//psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-	//	host, port, user, password, dbname)
-
 	db, err := sql.Open("postgres", psqlInfo)
 
 	id := c.Param("id")
@@ -179,6 +273,7 @@ func main() {
 
 	router := gin.Default()
 
+	router.POST("/login", login)           // **************  Get one user  **************
 	router.GET("/all", getAll)             // **************  Get all users  **************
 	router.GET("/user/:id", getOne)        // **************  Get one user  **************
 	router.POST("/user", insertUser)       // **************  Insert user  **************
