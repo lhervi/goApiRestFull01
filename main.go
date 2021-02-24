@@ -2,11 +2,14 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gofiber/fiber"
+	"github.com/gofiber/fiber/v2"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
@@ -55,41 +58,58 @@ type User struct {
 var psqlInfo string = fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 	host, port, user, password, dbname)
 
-//*****************************
+//EvalToken check if the token is ok
+func EvalToken(c *gin.Context) bool {
+	// We can obtain the session token from the requests cookies, which come with every request
+	tknStr, err := c.Cookie("token")
 
-func Login(c *gin.Context) {
-
-	//************ Get user information from the db
-	//w http.ResponseWriter, r *http.Request,
-
-	db, err := sql.Open("postgres", psqlInfo)
-
-	userInfo.Email = c.PostForm("email")
-	userInfo.Passsword = c.PostForm("password")
-	fmt.Println(" ")
-
-	fmt.Println(userInfo.Email)
-	fmt.Println(userInfo.Passsword)
-	fmt.Println(" ")
-
-	fmt.Printf(`email: %s  password: %s `, userInfo.Email, userInfo.Passsword)
-	fmt.Println(" ")
-
-	sqlStatement := `SELECT phrase FROM UserInfo WHERE email=$1 and password=$2;`
-	row := db.QueryRow(sqlStatement, userInfo.Email, userInfo.Passsword)
-	err = row.Scan(&userInfo.Phrase)
 	if err != nil {
-
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Println(row)
-		fmt.Println(err.Error())
-		return
+		if err == http.ErrNoCookie {
+			// If the cookie is not set, return an unauthorized status
+			c.Writer.WriteHeader(http.StatusUnauthorized) //w.WriteHeader(http.StatusUnauthorized)
+			return false
+		}
+		// For any other type of error, return a bad request status
+		c.Writer.WriteHeader(http.StatusBadRequest) // w.WriteHeader(http.StatusBadRequest)
+		return false
 	}
 
-	jwtKey = []byte(userInfo.Phrase)
+	// Get the JWT string from the cookie
+	//tknStr := t
 
-	fmt.Printf(`El valor de jwtKey es %s`, jwtKey)
-	fmt.Println(" ")
+	// Initialize a new instance of `Claims`
+	claims := &Claims{}
+
+	// Parse the JWT string and store the result in `claims`.
+	// Note that we are passing the key in this method as well. This method will return an error
+	// if the token is invalid (if it has expired according to the expiry time we set on sign in),
+	// or if the signature does not match
+	tkn, err := jwt.ParseWithClaims(tknStr, claims, func(token *jwt.Token) (interface{}, error) {
+		return jwtKey, nil
+	})
+	if err != nil {
+		if err == jwt.ErrSignatureInvalid {
+			c.Writer.WriteHeader(http.StatusUnauthorized)
+			return false
+		}
+		c.Writer.WriteHeader(http.StatusBadRequest)
+		return false
+	}
+	if !tkn.Valid {
+		c.Writer.WriteHeader(http.StatusUnauthorized)
+	}
+
+	c.String(200, "Welcome %s:", claims.UserEmail)
+
+	return true
+}
+
+//*****************************
+
+//setTokens
+func setTokens(email, phrase string, c *gin.Context) {
+
+	jwtKey = []byte(phrase)
 
 	expirationTime := time.Now().Add(5 * time.Minute)
 
@@ -107,39 +127,123 @@ func Login(c *gin.Context) {
 	// Create the JWT string
 
 	tokenString, err := token.SignedString(jwtKey)
-	fmt.Println(" ")
-	fmt.Printf(`El valor del tokenString: %s`, tokenString)
-	fmt.Println(" ")
+
 	if err != nil {
 		// If there is an error in creating the JWT return an internal server error
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Print(err.Error())
-		fmt.Printf(`Error construyendo el Token %s`, err.Error())
+		c.Writer.WriteHeader(http.StatusInternalServerError) //w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	// Finally, we set the client cookie for "token" as the JWT we just generated
 	// we also set an expiry time which is the same as the token itself
 
-	/*
-		http.SetCookie(w, &http.Cookie{
-			Name:    "token",
-			Value:   tokenString,
-			Expires: expirationTime,
-		})
-	*/
-
-	cookie := http.Cookie{
-		Name:  "mycookie",
-		Value: "prueba",
-	}
-
-	http.SetCookie(w, &cookie)
+	c.SetCookie("accessToken", tokenString, 120, "/", "localhost", false, true)
+	c.SetCookie("refreshToken", tokenString, 604800, "/", "localhost", false, true)
 
 }
 
-//*****************************
+func middle() func(*gin.Context) error {
+	return func(c *gin.Context) error {
+		accessToken, err := c.Cookie("accesstoken")
+		claims := new(Claims)
 
+		token, err := jwt.ParseWithClaims(accessToken, claims,
+			func(token *jwt.Token) (interface{}, error) {
+				return jwtKey, nil
+			})
+
+		if token.Valid {
+			if claims.ExpiresAt < time.Now().Unix() {
+
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"error":   true,
+					"general": "Token Expired",
+				})
+			}
+			
+			
+		} else if ve, ok := err.(*jwt.ValidationError); ok {
+			if ve.Errors&jwt.ValidationErrorMalformed != 0 {
+				// this is not even a token, we should delete the cookies here
+
+				//Clear cookies("accessToken", "refreshToken")
+				c.SetCookie("accessToken", "none", -1, "/", "localhost", false, true)
+				c.SetCookie("refreshToken", "none", -1, "/", "localhost", false, true)
+
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":   true,
+					"general": "StatusForbidden",
+				})
+				return errors.New("StatusForbidden")	
+
+				
+
+			} else if ve.Errors&(jwt.ValidationErrorExpired|jwt.ValidationErrorNotValidYet) != 0 {
+				// Token is either expired or not active yet
+								
+				return errors.New("StatusUnauthorized")
+
+			} else {
+				// cannot handle this token
+				c.SetCookie("accessToken", "none", -1, "/", "localhost", false, true)
+				c.SetCookie("refreshToken", "none", -1, "/", "localhost", false, true)
+
+				return errors.New("StatusForbidden")
+			}
+		}
+
+		//c.Locals("email", claims.UserEmail)
+		c.Keys = {"email":claims.UserEmail}
+		return c.Next()
+	}
+}
+
+//refreshLogin function
+func refreshLogin(email string, c *gin.Context) error {
+
+	//************ Get user information from the db
+
+	db, err := sql.Open("postgres", psqlInfo)
+
+	sqlStatement := `SELECT phrase FROM UserInfo WHERE email=$1;`
+	row := db.QueryRow(sqlStatement, userInfo.Email)
+	err = row.Scan(&userInfo.Phrase)
+	if err != nil {
+		return err
+	}
+
+	//Create auth token and refresh token
+	setTokens(userInfo.Email, userInfo.Phrase, c)
+
+}
+
+//Login function
+func Login(c *gin.Context) {
+
+	//************ Get user information from the db
+
+	db, err := sql.Open("postgres", psqlInfo)
+	userInfo.Email = c.PostForm("email")
+	userInfo.Passsword = c.PostForm("password")
+
+	sqlStatement := `SELECT phrase FROM UserInfo WHERE email=$1 and password=$2;`
+	row := db.QueryRow(sqlStatement, userInfo.Email, userInfo.Passsword)
+	err = row.Scan(&userInfo.Phrase)
+	if err != nil {
+		c.Writer.WriteHeader(http.StatusUnauthorized) //w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	//Create auth token and refresh token
+	setTokens(userInfo.Email, userInfo.Phrase, c)
+
+}
+
+//GetAll function
 func GetAll(c *gin.Context) {
+
+	if !EvalToken(c) {
+		return
+	}
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -150,13 +254,17 @@ func GetAll(c *gin.Context) {
 
 	rows, err := db.Query("SELECT id, name, lastname, email, role FROM UserInfo")
 	if err != nil {
+		c.Writer.WriteHeader(http.StatusNotFound)
 		fmt.Print(err.Error())
+		return
 	}
 	for rows.Next() {
 		err = rows.Scan(&user.ID, &user.Name, &user.Lastname, &user.Email, &user.Role)
 		users = append(users, user)
 		if err != nil {
+			c.Writer.WriteHeader(http.StatusNoContent)
 			fmt.Print(err.Error())
+			return
 		}
 	}
 	defer rows.Close()
@@ -167,6 +275,10 @@ func GetAll(c *gin.Context) {
 }
 
 func getOne(c *gin.Context) {
+
+	if !EvalToken(c) {
+		return
+	}
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -180,11 +292,13 @@ func getOne(c *gin.Context) {
 	row := db.QueryRow(sqlStatement, id)
 	err = row.Scan(&user.ID, &user.Name, &user.Lastname, &user.Email, &user.Role)
 	if err != nil {
+		c.Writer.WriteHeader(http.StatusNoContent)
 		result = gin.H{
 			"result": nil,
 			"count":  1,
 			"error":  err,
 		}
+		return
 	} else {
 		result = gin.H{
 			"result": user,
@@ -195,6 +309,10 @@ func getOne(c *gin.Context) {
 }
 
 func insertUser(c *gin.Context) {
+
+	if !EvalToken(c) {
+		return
+	}
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -208,10 +326,14 @@ func insertUser(c *gin.Context) {
 	stmt, err := db.Prepare("INSERT INTO UserInfo (name, lastname, email, phrase, password, role) VALUES ($1, $2, $3, $4, $5, $6)")
 	if err != nil {
 		fmt.Print(err.Error())
+		c.Writer.WriteHeader(http.StatusServiceUnavailable)
+		return
 	}
 	_, err = stmt.Exec(name, lastname, email, phrase, password, role)
 	if err != nil {
 		fmt.Print(err.Error())
+		c.Writer.WriteHeader(http.StatusNotAcceptable)
+		return
 	}
 
 	defer stmt.Close()
@@ -222,6 +344,10 @@ func insertUser(c *gin.Context) {
 }
 
 func updateUser(c *gin.Context) {
+
+	if !EvalToken(c) {
+		return
+	}
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -251,6 +377,10 @@ func updateUser(c *gin.Context) {
 }
 
 func deleteUser(c *gin.Context) {
+
+	if !EvalToken(c) {
+		return
+	}
 
 	db, err := sql.Open("postgres", psqlInfo)
 
