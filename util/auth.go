@@ -7,6 +7,10 @@ import (
 	"guthub.com/dgrijalva/jwt-go"
 )
 
+
+
+
+
 //GenerateTokens returns the access and refresh tokens
 func GenerateTokens(uuid string, email string, phrase string) (string, string) {
 	claim, accessToken := GenerateAccessClaims(uuid, email, phrase)
@@ -98,7 +102,9 @@ func SecureAuth() func(*fiber.Ctx) error {
 			if ve.Errors&jwt.ValidationErrorMalformed != 0 {
 				// this is not even a token, we should delete the cookies here
 				c.ClearCookie("access_token", "refresh_token")
-				return c.SendStatus(fiber.StatusForbidden)
+
+				return c.SendStatus(fiber.StatusForbidden)				
+
 			} else if ve.Errors&(jwt.ValidationErrorExpired|jwt.ValidationErrorNotValidYet) != 0 {
 				// Token is either expired or not active yet
 				return c.SendStatus(fiber.StatusUnauthorized)
@@ -130,7 +136,7 @@ func GetAuthCookies(accessToken, refreshToken string) (*fiber.Cookie, *fiber.Coo
 		Expires:  time.Now().Add(10 * 24 * time.Hour),
 		HTTPOnly: true,
 		Secure:   true,
-	}
+	} n
 
 	return accessCookie, refreshCookie
 }

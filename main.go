@@ -2,14 +2,12 @@ package main
 
 import (
 	"database/sql"
-	"errors"
+	//"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gofiber/fiber"
-	"github.com/gofiber/fiber/v2"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
@@ -109,24 +107,26 @@ func EvalToken(c *gin.Context) bool {
 //setTokens
 func setTokens(email, phrase string, c *gin.Context) {
 
-	jwtKey = []byte(phrase)
-
+	jwtKey := []byte(phrase)
 	expirationTime := time.Now().Add(5 * time.Minute)
-
+	
 	claims := &Claims{
-		UserEmail: userInfo.Email,
+		UserEmail: email,
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: expirationTime.Unix(),
 		},
 	}
-
 	// Declare the token with the algorithm used for signing, and the claims
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	//token := jwt.New(jwt.SigningMethodHS256)
 	// Create the JWT string
+	accTokn, err := token.SignedString(jwtKey)
 
-	tokenString, err := token.SignedString(jwtKey)
+	token = jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	//token := jwt.New(jwt.SigningMethodHS256)
+	// Create the JWT string
+	rfrTokn, err := token.SignedString(jwtKey)
 
 	if err != nil {
 		// If there is an error in creating the JWT return an internal server error
@@ -136,16 +136,117 @@ func setTokens(email, phrase string, c *gin.Context) {
 	// Finally, we set the client cookie for "token" as the JWT we just generated
 	// we also set an expiry time which is the same as the token itself
 
-	c.SetCookie("accessToken", tokenString, 120, "/", "localhost", false, true)
-	c.SetCookie("refreshToken", tokenString, 604800, "/", "localhost", false, true)
+	c.SetCookie("accessToken", accTokn, 600, "/", "localhost", false, true)
+	c.SetCookie("refreshToken", rfrTokn, 604800, "/", "localhost", false, true)
 
+	c.JSON(http.StatusOK, gin.H{
+		"accessToken": accTokn,
+		"refreshToken":  rfrTokn,
+	})
 }
 
-func middle() func(*gin.Context) error {
-	return func(c *gin.Context) error {
-		accessToken, err := c.Cookie("accesstoken")
+//delTokens
+func delTokens(c *gin.Context) {
+	c.SetCookie("accessToken", "none", -1, "/", "localhost", false, true)
+	c.SetCookie("refreshToken", "none", -1, "/", "localhost", false, true)
+}
+
+//Create auth token and refresh token
+//setTokens(userInfo.Email, userInfo.Phrase, c)
+
+func middle() gin.HandlerFunc {
+
+	return func(c *gin.Context) {
+
+		var claim Claims
+
+		accessToken,_ := c.Cookie("accessToken")
+
+	//Access token -------------------------
+
+	if accessToken != "" {
+		token,_ := jwt.ParseWithClaims(accessToken, claim,
+			func(token *jwt.Token) (interface{}, error) {
+				return jwtKey, nil
+			})
+
+		//Access token valid ----------------------------------------------
+		if token.Valid && claim.ExpiresAt >=  time.Now().Unix() {  
+			
+			c.JSON(http.StatusOK, gin.H{
+				"error":   true,
+				"general": "Token Expired",
+			})
+			c.Next()
+			return
+		}		
+		
+	}
+
+	//Refresh token -----------------------------------------------------
+	
+	refreshToken, err := c.Cookie("refreshToken")
+
+		if refreshToken == "" {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":   err,
+				"general": "Missing Auth Token",
+				"message": "User must be logged",
+			})
+			//Delete all tokens
+			delTokens(c)
+			return
+
+		} else if refreshToken != "" {
+
+			token, err := jwt.ParseWithClaims(refreshToken, claim,
+			func(token *jwt.Token) (interface{}, error) {
+				return jwtKey, nil
+			})
+
+			if err != nil {
+				if err == jwt.ErrSignatureInvalid {
+					c.Writer.WriteHeader(http.StatusUnauthorized)
+					delTokens(c) //Delete all tokens
+					return
+				}
+				c.Writer.WriteHeader(http.StatusBadRequest)
+				delTokens(c) //Delete all tokens
+				return
+			}
+			if !token.Valid || claim.ExpiresAt < time.Now().Unix() {
+				c.Writer.WriteHeader(http.StatusUnauthorized)
+				delTokens(c) //Delete all tokens
+				return
+			}				
+
+				//Refresh token ok -----------------------------------------------------
+
+				if token.Valid && claim.ExpiresAt >= time.Now().Unix() {
+					c.String(200, "Welcome %s:", claim.UserEmail)
+					//func getPhrase(email string) (string, error)
+					phrase, err := getPhrase(claim.UserEmail)
+					if err == nil {
+						//func setTokens(email, phrase string, c *gin.Context)
+						setTokens(claim.UserEmail, phrase, c)
+						c.Next()
+						return
+					}
+					c.Next()
+					return
+				}
+			}
+
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":   true,
+				"general": "Missing Auth Token",
+			})
+
+			
+
 		claims := new(Claims)
 
+		// jwtKey []byte("secret")
 		token, err := jwt.ParseWithClaims(accessToken, claims,
 			func(token *jwt.Token) (interface{}, error) {
 				return jwtKey, nil
@@ -159,61 +260,24 @@ func middle() func(*gin.Context) error {
 					"general": "Token Expired",
 				})
 			}
-			
-			
-		} else if ve, ok := err.(*jwt.ValidationError); ok {
-			if ve.Errors&jwt.ValidationErrorMalformed != 0 {
-				// this is not even a token, we should delete the cookies here
-
-				//Clear cookies("accessToken", "refreshToken")
-				c.SetCookie("accessToken", "none", -1, "/", "localhost", false, true)
-				c.SetCookie("refreshToken", "none", -1, "/", "localhost", false, true)
-
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":   true,
-					"general": "StatusForbidden",
-				})
-				return errors.New("StatusForbidden")	
-
-				
-
-			} else if ve.Errors&(jwt.ValidationErrorExpired|jwt.ValidationErrorNotValidYet) != 0 {
-				// Token is either expired or not active yet
-								
-				return errors.New("StatusUnauthorized")
-
-			} else {
-				// cannot handle this token
-				c.SetCookie("accessToken", "none", -1, "/", "localhost", false, true)
-				c.SetCookie("refreshToken", "none", -1, "/", "localhost", false, true)
-
-				return errors.New("StatusForbidden")
-			}
-		}
-
-		//c.Locals("email", claims.UserEmail)
-		c.Keys = {"email":claims.UserEmail}
-		return c.Next()
+		} 		
+		
+		c.Next()	
 	}
 }
 
-//refreshLogin function
-func refreshLogin(email string, c *gin.Context) error {
+//getPhrase function
+func getPhrase(email string) (string, error) {
 
-	//************ Get user information from the db
+	//************ Get user secret prhase information from the db
 
 	db, err := sql.Open("postgres", psqlInfo)
 
 	sqlStatement := `SELECT phrase FROM UserInfo WHERE email=$1;`
-	row := db.QueryRow(sqlStatement, userInfo.Email)
+	row := db.QueryRow(sqlStatement, email)
 	err = row.Scan(&userInfo.Phrase)
-	if err != nil {
-		return err
-	}
 
-	//Create auth token and refresh token
-	setTokens(userInfo.Email, userInfo.Phrase, c)
-
+	return userInfo.Phrase, err
 }
 
 //Login function
@@ -239,11 +303,7 @@ func Login(c *gin.Context) {
 }
 
 //GetAll function
-func GetAll(c *gin.Context) {
-
-	if !EvalToken(c) {
-		return
-	}
+func GetAll(c *gin.Context) {	
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -275,11 +335,7 @@ func GetAll(c *gin.Context) {
 }
 
 func getOne(c *gin.Context) {
-
-	if !EvalToken(c) {
-		return
-	}
-
+	
 	db, err := sql.Open("postgres", psqlInfo)
 
 	var (
@@ -310,10 +366,7 @@ func getOne(c *gin.Context) {
 
 func insertUser(c *gin.Context) {
 
-	if !EvalToken(c) {
-		return
-	}
-
+	
 	db, err := sql.Open("postgres", psqlInfo)
 
 	name := c.PostForm("name")
@@ -344,10 +397,7 @@ func insertUser(c *gin.Context) {
 }
 
 func updateUser(c *gin.Context) {
-
-	if !EvalToken(c) {
-		return
-	}
+	
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -376,11 +426,7 @@ func updateUser(c *gin.Context) {
 	})
 }
 
-func deleteUser(c *gin.Context) {
-
-	if !EvalToken(c) {
-		return
-	}
+func deleteUser(c *gin.Context) {	
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -402,6 +448,7 @@ func deleteUser(c *gin.Context) {
 func main() {
 
 	router := gin.Default()
+	router.Use(middle())	
 
 	router.POST("/login", Login)           // **************  Get one user  **************
 	router.GET("/all", GetAll)             // **************  Get all users  **************
