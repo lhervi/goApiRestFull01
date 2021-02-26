@@ -109,7 +109,7 @@ func setTokens(email, phrase string, c *gin.Context) {
 
 	jwtKey := []byte(phrase)
 	expirationTime := time.Now().Add(5 * time.Minute)
-	
+
 	claims := &Claims{
 		UserEmail: email,
 		StandardClaims: jwt.StandardClaims{
@@ -139,10 +139,15 @@ func setTokens(email, phrase string, c *gin.Context) {
 	c.SetCookie("accessToken", accTokn, 600, "/", "localhost", false, true)
 	c.SetCookie("refreshToken", rfrTokn, 604800, "/", "localhost", false, true)
 
+	fmt.Printf(`accessToken: %s`, accTokn)
+	fmt.Println("")
+	fmt.Printf(`refreshToken: %s`, rfrTokn)
+
 	c.JSON(http.StatusOK, gin.H{
-		"accessToken": accTokn,
-		"refreshToken":  rfrTokn,
+		"accessTokenvalue":  accTokn,
+		"refreshTokenvalue": rfrTokn,
 	})
+
 }
 
 //delTokens
@@ -160,32 +165,32 @@ func middle() gin.HandlerFunc {
 
 		var claim Claims
 
-		accessToken,_ := c.Cookie("accessToken")
+		accessToken, _ := c.Cookie("accessToken")
 
-	//Access token -------------------------
+		//Access token -------------------------
 
-	if accessToken != "" {
-		token,_ := jwt.ParseWithClaims(accessToken, claim,
-			func(token *jwt.Token) (interface{}, error) {
-				return jwtKey, nil
-			})
+		if accessToken != "" {
+			token, _ := jwt.ParseWithClaims(accessToken, claim,
+				func(token *jwt.Token) (interface{}, error) {
+					return jwtKey, nil
+				})
 
-		//Access token valid ----------------------------------------------
-		if token.Valid && claim.ExpiresAt >=  time.Now().Unix() {  
-			
-			c.JSON(http.StatusOK, gin.H{
-				"error":   true,
-				"general": "Token Expired",
-			})
-			c.Next()
-			return
-		}		
-		
-	}
+			//Access token valid ----------------------------------------------
+			if token.Valid && claim.ExpiresAt >= time.Now().Unix() {
 
-	//Refresh token -----------------------------------------------------
-	
-	refreshToken, err := c.Cookie("refreshToken")
+				c.JSON(http.StatusOK, gin.H{
+					"error":   true,
+					"general": "Token Expired",
+				})
+				c.Next()
+				return
+			}
+
+		}
+
+		//Refresh token -----------------------------------------------------
+
+		refreshToken, err := c.Cookie("refreshToken")
 
 		if refreshToken == "" {
 			c.JSON(http.StatusForbidden, gin.H{
@@ -200,9 +205,9 @@ func middle() gin.HandlerFunc {
 		} else if refreshToken != "" {
 
 			token, err := jwt.ParseWithClaims(refreshToken, claim,
-			func(token *jwt.Token) (interface{}, error) {
-				return jwtKey, nil
-			})
+				func(token *jwt.Token) (interface{}, error) {
+					return jwtKey, nil
+				})
 
 			if err != nil {
 				if err == jwt.ErrSignatureInvalid {
@@ -218,31 +223,29 @@ func middle() gin.HandlerFunc {
 				c.Writer.WriteHeader(http.StatusUnauthorized)
 				delTokens(c) //Delete all tokens
 				return
-			}				
+			}
 
-				//Refresh token ok -----------------------------------------------------
+			//Refresh token ok -----------------------------------------------------
 
-				if token.Valid && claim.ExpiresAt >= time.Now().Unix() {
-					c.String(200, "Welcome %s:", claim.UserEmail)
-					//func getPhrase(email string) (string, error)
-					phrase, err := getPhrase(claim.UserEmail)
-					if err == nil {
-						//func setTokens(email, phrase string, c *gin.Context)
-						setTokens(claim.UserEmail, phrase, c)
-						c.Next()
-						return
-					}
+			if token.Valid && claim.ExpiresAt >= time.Now().Unix() {
+				c.String(200, "Welcome %s:", claim.UserEmail)
+				//func getPhrase(email string) (string, error)
+				phrase, err := getPhrase(claim.UserEmail)
+				if err == nil {
+					//func setTokens(email, phrase string, c *gin.Context)
+					setTokens(claim.UserEmail, phrase, c)
 					c.Next()
 					return
 				}
+				c.Next()
+				return
 			}
+		}
 
-			c.JSON(http.StatusForbidden, gin.H{
-				"error":   true,
-				"general": "Missing Auth Token",
-			})
-
-			
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   true,
+			"general": "Missing Auth Token",
+		})
 
 		claims := new(Claims)
 
@@ -260,9 +263,9 @@ func middle() gin.HandlerFunc {
 					"general": "Token Expired",
 				})
 			}
-		} 		
-		
-		c.Next()	
+		}
+
+		c.Next()
 	}
 }
 
@@ -303,7 +306,7 @@ func Login(c *gin.Context) {
 }
 
 //GetAll function
-func GetAll(c *gin.Context) {	
+func GetAll(c *gin.Context) {
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -335,7 +338,7 @@ func GetAll(c *gin.Context) {
 }
 
 func getOne(c *gin.Context) {
-	
+
 	db, err := sql.Open("postgres", psqlInfo)
 
 	var (
@@ -355,18 +358,17 @@ func getOne(c *gin.Context) {
 			"error":  err,
 		}
 		return
-	} else {
-		result = gin.H{
-			"result": user,
-			"count":  1,
-		}
+	}
+
+	result = gin.H{
+		"result": user,
+		"count":  1,
 	}
 	c.JSON(http.StatusOK, result)
 }
 
 func insertUser(c *gin.Context) {
 
-	
 	db, err := sql.Open("postgres", psqlInfo)
 
 	name := c.PostForm("name")
@@ -397,7 +399,6 @@ func insertUser(c *gin.Context) {
 }
 
 func updateUser(c *gin.Context) {
-	
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -426,7 +427,7 @@ func updateUser(c *gin.Context) {
 	})
 }
 
-func deleteUser(c *gin.Context) {	
+func deleteUser(c *gin.Context) {
 
 	db, err := sql.Open("postgres", psqlInfo)
 
@@ -448,14 +449,14 @@ func deleteUser(c *gin.Context) {
 func main() {
 
 	router := gin.Default()
-	router.Use(middle())	
+	//router.Use(middle())
 
-	router.POST("/login", Login)           // **************  Get one user  **************
-	router.GET("/all", GetAll)             // **************  Get all users  **************
-	router.GET("/user/:id", getOne)        // **************  Get one user  **************
-	router.POST("/user", insertUser)       // **************  Insert user  **************
-	router.PUT("/user", updateUser)        // **************  Update user  **************
-	router.DELETE("/user/:id", deleteUser) // **************  Delete user  **************
+	router.POST("/login", Login)                     // **************  Get one user  **************
+	router.GET("/all", middle(), GetAll)             // **************  Get all users  **************
+	router.GET("/user/:id", middle(), getOne)        // **************  Get one user  **************
+	router.POST("/user", middle(), insertUser)       // **************  Insert user  **************
+	router.PUT("/user", middle(), updateUser)        // **************  Update user  **************
+	router.DELETE("/user/:id", middle(), deleteUser) // **************  Delete user  **************
 
 	router.Run(":3020")
 
